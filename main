@@ -1,0 +1,143 @@
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+import os
+from tqdm import tqdm
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.metrics import accuracy_score
+from collections import defaultdict
+
+
+# Путь до датасета
+putb = 'dat'
+
+IMG_SIZE = 32
+MAX_IMGS_PER_CLASS = 100
+
+# ---------- 1. Загрузка датасета ----------
+print("📂 Загружаем датасет")
+path = putb 
+image_dir = None
+for root, dirs, files in os.walk(path):
+    if files and any(f.endswith(('.jpg','.png')) for f in files):
+        image_dir = root
+        break
+if not image_dir:
+    raise Exception("Папка с изображениями не найдена")
+image_dir = putb 
+
+
+#_____________________________________________________________________________________________________
+
+X_orig, X, y = [], [], []
+all_images = []
+for root, dirs, files in os.walk(image_dir):
+    for f in files:
+        if f.endswith(('.jpg','.png')):
+            all_images.append(os.path.join(root, f))
+
+class_files = defaultdict(list)
+for p in all_images:
+    class_name = os.path.basename(os.path.dirname(p))
+    class_files[class_name].append(p)
+
+print("🔄 Чтение изображений...")
+for class_name, file_list in tqdm(class_files.items(), desc="Классы"):
+    for img_path in file_list[:MAX_IMGS_PER_CLASS]:
+        img = cv2.imread(img_path)
+        if img is None:
+            continue
+        X_orig.append(img)
+        img_resized = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
+        X.append(img_resized.flatten().astype(np.float32))
+        y.append(class_name)
+
+X = np.array(X)
+y = np.array(y)
+le = LabelEncoder()
+y_enc = le.fit_transform(y)
+print(f"✅ Загружено {len(X)} изображений, классов: {len(le.classes_)}")
+
+
+#________________________________________________________________________________________________
+
+
+sample_img = X_orig[1]  # берём первую
+
+transformations = [
+    ('Оригинал', lambda x: x),
+    # ('Поворот 90°', lambda x: cv2.rotate(x, cv2.ROTATE_90_CLOCKWISE)),
+    ('Отражение', lambda x: cv2.flip(x, 1)),
+    ('Ярче', lambda x: cv2.convertScaleAbs(x, alpha=1.2, beta=10)),
+    # ('Размытие', lambda x: cv2.GaussianBlur(x, (3,3), 0))
+]
+
+plt.figure(figsize=(15,5))
+for i, (name, func) in enumerate(transformations):
+    aug_img = func(sample_img)
+    plt.subplot(1, len(transformations), i+1)
+    plt.imshow(cv2.cvtColor(aug_img, cv2.COLOR_BGR2RGB))
+    plt.title(f"{name}\n{aug_img.shape[:2]}")
+    plt.axis('off')
+plt.suptitle("Аугментации на оригинальной картинке (размер не изменён)")
+plt.tight_layout(); plt.show()
+
+
+#_______________________________________________________________________________________________
+
+X_train, X_test, y_train, y_test = train_test_split(X, y_enc, test_size=0.2, random_state=42)
+print("🔄 Применяем аугментации к тренировочным данным...")
+X_train_aug, y_train_aug = [], []
+for img, label in tqdm(zip(X_train, y_train), total=len(X_train)):
+    img_3d = img.reshape(IMG_SIZE, IMG_SIZE, 3).astype(np.uint8)
+    for name, func in transformations:
+        aug_img = func(img_3d)
+        X_train_aug.append(aug_img.flatten().astype(np.float32))
+        y_train_aug.append(label)
+
+X_train_aug = np.array(X_train_aug)
+y_train_aug = np.array(y_train_aug)
+print(f"Размер тренировочного набора после аугментации: {len(X_train_aug)} (было {len(X_train)})")
+
+#__________________________________________________________________________________________________
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+print("🤖 Обучение модели...")
+clf = LogisticRegression()
+clf.fit(X_train_aug, y_train_aug)
+
+#_______________________________________________________________________________________________
+
+test_acc = accuracy_score(y_test, clf.predict(X_test))
+print(f"✅ Точность на тесте: {test_acc:.3f}")
+
+#_______________________________________________________________________________________________
+
+plt.figure(figsize=(15,8))
+for i in range(8):
+    idx = np.random.randint(len(X_orig))
+    img_orig = X_orig[idx]
+    # ресайз для модели
+    img_resized = cv2.resize(img_orig, (IMG_SIZE, IMG_SIZE)).flatten().astype(np.float32).reshape(1, -1)
+    pred = clf.predict(img_resized)[0]
+    true_label_idx = y_enc[idx]  # метка этой картинки (оригинал соответствует X_orig и y_enc по порядку)
+    true_label = le.classes_[true_label_idx]
+    pred_label = le.classes_[pred]
+    plt.subplot(2,4,i+1)
+    plt.imshow(cv2.cvtColor(img_orig, cv2.COLOR_BGR2RGB))
+    plt.title(f'И: {true_label[:5]}\nП: {pred_label[:5]}', color='g' if pred==true_label_idx else 'r')
+    plt.axis('off')
+plt.suptitle("Оригинальные картинки с предсказаниями модели")
+plt.tight_layout(); plt.show()
+
+
+
+
+
+
+
+
+
